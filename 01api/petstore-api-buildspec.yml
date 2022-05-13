@@ -4,7 +4,7 @@ phases:
     commands:
       - cd 01api
       - aws cloudformation package --template-file petstore-api.yaml
-                                   --s3-bucket spp-webapp-790676557563.softwarepricing.com
+                                   --s3-bucket spp-code-790676557563-us-east-1
                                    --s3-prefix api-code
                                    --output-template-file petstore-api-output.yaml
 artifacts:
