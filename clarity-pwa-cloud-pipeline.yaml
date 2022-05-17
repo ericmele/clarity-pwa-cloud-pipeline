@@ -184,7 +184,7 @@ Resources:
           - '/'
           - !Ref GitHubRepositoryName
         Type:  GITHUB
-        BuildSpec: ../clarity-pwa-cloud/template.yaml
+        BuildSpec: template.yaml
       TimeoutInMinutes: 10
       Tags:
       - Key: Name

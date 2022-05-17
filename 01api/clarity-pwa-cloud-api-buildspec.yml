@@ -2,8 +2,6 @@ version: 0.2
 phases:
   install:
     commands:
-      # no need to CD, because the template file is being pulled from the root of the clarity-pwa-cloud repository (not this one)
-      # - cd 01api
       - aws cloudformation package --template-file template.yaml
                                    --s3-bucket spp-code-790676557563-us-east-1
                                    --s3-prefix api-code
