@@ -1,0 +1,13 @@
+version: 0.2
+phases:
+  install:
+    commands:
+      - cd 01api
+      - aws cloudformation package --template-file template.yaml
+                                   --s3-bucket spp-code-790676557563-us-east-1
+                                   --s3-prefix api-code
+                                   --output-template-file clarity-pwa-cloud-output.yaml
+artifacts:
+  type: zip
+  files:
+    - clarity-pwa-cloud-output.yaml

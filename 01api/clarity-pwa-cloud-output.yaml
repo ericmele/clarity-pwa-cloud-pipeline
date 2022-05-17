@@ -1,0 +1,1880 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Globals:
+  Function:
+    Runtime: python3.7
+    Handler: lambda_function.lambda_handler
+    Tracing: Active
+    Environment:
+      Variables:
+        REGION:
+          Ref: AWS::Region
+        BUCKET:
+          Fn::ImportValue: foundation-s3-web-app
+        ATHENA_BUCKET:
+          Fn::ImportValue: foundation-s3-athena-temp
+        DATA_BUCKET:
+          Fn::ImportValue: foundation-s3-data-lake-and-marts
+        SNS_ERROR:
+          Fn::ImportValue: foundation-sns-ops-notifications-arn
+        TENANT_CALC_MODEL_USAGE_STEPS_ARN:
+          Ref: StepsTenantCalcModelUsageTotals
+        PROVISION_CUSTOMER_STEPS_ARN:
+          Ref: StepsProvisionCustomer
+    Timeout: 60
+    MemorySize: 1024
+    Layers:
+    - Ref: HelperLayer
+    - Fn::ImportValue: sns-layer-arn
+    - Fn::ImportValue: common-helper-layer-v5-arn
+  Api:
+    Cors:
+      AllowOrigin: "'*'"
+      AllowMethods: "'GET,PUT,POST,OPTIONS,DELETE'"
+      AllowHeaders: "'X-Requested-With,Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+Resources:
+  ExternalApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: ExternalApi
+      StageName: V1
+      GatewayResponses:
+        MISSING_AUTHENTICATION_TOKEN:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'*'"
+              Cache-Control: "'no-cache'"
+              Content-Type: "'application/json'"
+          ResponseTemplates:
+            application/json: '{"errors": [{errorKey: "error Value"}]}'
+          StatusCode: 404
+        UNAUTHORIZED:
+          StatusCode: 401
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+        ACCESS_DENIED:
+          StatusCode: 403
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+        DEFAULT_5XX:
+          StatusCode: 500
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+        RESOURCE_NOT_FOUND:
+          StatusCode: 404
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+      Auth:
+        AddDefaultAuthorizerToCorsPreflight: false
+        InvokeRole: NONE
+        ApiKeyRequired: true
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          UsagePlanName: SPP-External-Usage-Plan
+          Quota:
+            Limit: 10000
+            Period: DAY
+          Throttle:
+            BurstLimit: 5000
+            RateLimit: 10000
+          Description: SPP-External-Usage-Plan
+  InternalApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: pwa-api
+      StageName: Prod
+      Auth:
+        AddDefaultAuthorizerToCorsPreflight: false
+        InvokeRole: NONE
+        DefaultAuthorizer: AWS_IAM
+        Authorizers:
+          webapi-cognito-authorizer:
+            UserPoolArn:
+              Fn::ImportValue: foundation-cognito-user-pool-arn
+  NodeJsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: helpers
+      ContentUri: s3://spp-code-790676557563-us-east-1/api-code/028f7f903a337047bd6a9b44e623c1ec
+      CompatibleRuntimes:
+      - nodejs14.x
+      RetentionPolicy: Retain
+  HelperLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: helper-layer-v2
+      ContentUri: s3://spp-code-790676557563-us-east-1/api-code/c36ddf7ee0992385ffc4e320ceb0dff6
+      CompatibleRuntimes:
+      - python3.7
+      RetentionPolicy: Retain
+  UtilModelMathematicsGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs14.x
+      Handler: handler.handler
+      Layers:
+      - Ref: NodeJsLayer
+      FunctionName: util-get-model-mathematics
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/00bc38d95fed742bc479ccd523f78ed0
+      Description: util function using ModelCalcs layer
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  UtilModelDiscountAtListPriceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs14.x
+      Handler: handler.handler
+      Layers:
+      - Ref: NodeJsLayer
+      FunctionName: util-get-model-discount-at-list-price
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/5b67eebd7d35a430b95ad983d129e8ef
+      Description: util function using ModelCalcs layer
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  UtilModelDiscountAtListPriceRangeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs14.x
+      Handler: handler.handler
+      Layers:
+      - Ref: NodeJsLayer
+      FunctionName: util-get-model-discount-at-list-price-range
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/bd4c19aac6b4c291404f3bb1e24753ea
+      Description: util function using ModelCalcs layer
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  ApiPwaPackagingValueDriversGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-drivers-get
+      Description: return packaging value-drivers
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/3b488a66cffae3e774a301c25a0a36c4
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriversGetFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-drivers
+            Method: GET
+  ApiPwaPackagingValueDriverNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-delete
+      Description: remove packaging value-driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/319bacb94cebe7c28b9f9472424e1de5
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNameDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}
+            Method: DELETE
+  ApiPwaPackagingValueDriverNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-post
+      Description: upsert packaging value-driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/57be32f699e2dad9f75de98058cab04b
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNamePostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}
+            Method: POST
+  ApiPwaPackagingValueDriverNameOfferingNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-offering-uuid-delete
+      Description: remove an offering from a value driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/0f1840cd7f0332b011c3239a0f001284
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNameDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}/offering/{offering_uuid}
+            Method: DELETE
+  ApiPwaPackagingValueDriverNameOfferingNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-offering-uuid-post
+      Description: assign an offering to a value driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/1af2002fb1903c1db2c430403b01f0a2
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNamePostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}/offering/{offering_uuid}
+            Method: POST
+  ApiPwaPackagingValueDriverNameFeatureNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-feature-uuid-delete
+      Description: remove a feature from a value driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/5c4162c4eb06633d13533ec17d98f581
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNameFeatureNameDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}/feature/{feature_uuid}
+            Method: DELETE
+  ApiPwaPackagingValueDriverNameFeatureNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-feature-uuid-post
+      Description: assign a feature to a value driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/29099bc1dd258e14f752cecfbce93343
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNameFeatureNamePostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}/feature/{feature_uuid}
+            Method: POST
+  ApiPwaPackagingValueDriverNameCustomerNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-customer-uuid-delete
+      Description: remove a customer from a value driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7cdc17f2ae2cf708dc0500eb8628fc9a
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNameCustomerNameDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}/customer/{customer_uuid}
+            Method: DELETE
+  ApiPwaPackagingValueDriverNameCustomerNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-value-driver-uuid-customer-uuid-post
+      Description: assign a customer to a value driver
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/c771490899bfd372e429690e087272aa
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingValueDriverNameCustomerNamePostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/value-driver/{value_driver_uuid}/customer/{customer_uuid}
+            Method: POST
+  ApiPwaPackagingOfferingsGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-offerings-get
+      Description: return packaging offerings
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/0389dd744ed89b375c4737470c13dbb4
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingOfferingsGetFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/offerings
+            Method: GET
+  ApiPwaPackagingOfferingNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-offering-uuid-delete
+      Description: remove packaging offering
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7a590b99737b9f9322021d159918b871
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingOfferingNameDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/offering/{offering_uuid}
+            Method: DELETE
+  ApiPwaPackagingOfferingNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-offering-uuid-post
+      Description: upsert packaging offering
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/ade4ba8b7b77319ad0aed74dd177e3f1
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingOfferingNamePostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/offering/{offering_uuid}
+            Method: POST
+  ApiPwaPackagingFeaturesGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-features-get
+      Description: return packaging features
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/e0592be025e3065cb172639b4b97850e
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingFeaturesGetFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/features
+            Method: GET
+  ApiPwaPackagingCustomersGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-customers-get
+      Description: return packaging customers
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/31b0298f10bb3544babac18debbf042a
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCustomersGetFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/customers
+            Method: GET
+  ApiPwaPackagingCustomerNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-customer-uuid-delete
+      Description: remove packaging customer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/ac0d1a22e86ebb29907f03b6341fbc96
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCustomerNameDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/customer/{customer_uuid}
+            Method: DELETE
+  ApiPwaPackagingCustomerNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-customer-uuid-post
+      Description: upsert packaging customer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/924308cfe154803ab030bd36e4bdb3fd
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCustomerNamePostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/customer/{customer_uuid}
+            Method: POST
+  ApiPwaPackagingCustomerNameCriterionNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-customer-uuid-criterion-uuid-delete
+      Description: remove packaging customer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/3b9ab6fbe3fbccb500c1c3964ee72430
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCustomerNameCriterionNameDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/customer/{customer_uuid}/criterion/{criterion_uuid}
+            Method: DELETE
+  ApiPwaPackagingCustomerNameCriterionNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-customer-uuid-criterion-uuid-post
+      Description: upsert packaging customer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/9c4238b145f02e0ce3a63e571054bf80
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCustomerNameCriterionNamePostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/customer/{customer_uuid}/criterion/{criterion_uuid}
+            Method: POST
+  ApiPwaPackagingCriteriaGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-criteria-get
+      Description: return packaging criteria
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/6090360384edcc16f95d493286027e6a
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCriteriaGetFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/criteria
+            Method: GET
+  ApiPwaPackagingCriterionUuidPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-criterion-uuid-post
+      Description: upsert criterion
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/d12f0ee281bc52c6c9eb1d69d492ffe0
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCriterionUuidPostFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/criterion/{criterion_uuid}
+            Method: POST
+  ApiPwaPackagingCriterionUuidDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-packaging-criterion-uuid-delete
+      Description: remove packaging criterion
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/5ba37e6f10b5a6987fdbc7bef5749dc6
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ApiPwaPackagingCriterionUuidDeleteFunction:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /packaging/criterion/{criterion_uuid}
+            Method: DELETE
+  ApiPwaLicensingCriteriaGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-licensing-criteria-get
+      Description: returns list of licensing criteria
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7be0c4671b6374cc29b358c4f5f80cfe
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        LicensingCriteriaGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /licensing/criteria
+            Method: GET
+  ApiPwaLicensingMetricsGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-licensing-metrics-get
+      Description: returns list of licensing metrics
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/961b33b912910a8c6fac1ca5d44695a2
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        LicensingMetricsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /licensing/metrics
+            Method: GET
+  ApiPwaLicensingMetricNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-licensing-metric-uuid-post
+      Description: upsert metric with criteria assignments
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/89b4e6572cd494e946583e1ad7242cda
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        LicensingMetricNamePost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /licensing/metric/{metric_uuid}
+            Method: POST
+  ApiPwaLicensingMetricNameDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-licensing-metric-uuid-delete
+      Description: remove licensing metric
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/1af483ad59511493bdf4d66459c129c2
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        LicensingMetricNameDelete:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /licensing/metric/{metric_uuid}
+            Method: DELETE
+  ApiPwaModelsGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-models-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/22b045a5a3aa1d6a32ecd8fabf5b62a9
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /models
+            Method: GET
+        ExternalModelsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /models
+            Method: GET
+  ApiPwaModelUuidDealsheetsGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-dealsheets-get
+      Description: get all dealsheets for a given model
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/b1e8004029a568c280bd283f786802f4
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuiddealsheetsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/dealsheets
+            Method: GET
+  ApiPwaModelUuidDealsheetUuidGet:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-dealsheet-uuid-get
+      Description: get the dealsheet
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/32cc9d7ee95c498a5d42421a89c6a91f
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDealsheetUuidGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/dealsheet/{dealsheet_uuid}
+            Method: GET
+  ApiPwaModelUuidDealsheetUuidPost:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-dealsheet-uuid-post
+      Description: insert or update the dealsheet, including moving to a new model
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7ecd4a4a1c7b92b5d959100da541e361
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDealsheetUuidPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/dealsheet/{dealsheet_uuid}
+            Method: POST
+  ApiPwaModelUuidDealsheetUuidDelete:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-dealsheet-uuid-delete
+      Description: delete the dealsheet
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/d1a64b04545ccae7600b7c2ca4dfb103
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDealsheetUuidDelete:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/dealsheet/{dealsheet_uuid}
+            Method: DELETE
+  ApiPwaModelUuidMetricPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-metric-post
+      Description: change the license metric for the model
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/30f5a12017c908c0c10aecee1057fc26
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidQuotesGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/metric
+            Method: POST
+  ApiPwaModelUuidNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-name-post
+      Description: change the license metric for the model
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/99e4fc15d9cb1935db7206f4670ea7ce
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidQuotesGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/name
+            Method: POST
+  ApiPwaModelUuidQuotesGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-quotes-get
+      Description: DEPRECATED backing to API, get all quotes for a given model
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7604aa6151f64a0da4586514a6018fe0
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidQuotesGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/quotes
+            Method: GET
+  ApiPwaModelUuidQuoteUuidGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-quote-uuid-get
+      Description: DEPRECATED backing to API, return the dealsheet items for the quote
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/6fff285115d6b17c225719cd813dfe1e
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidQuoteUuidGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/quote/{quote_uuid}
+            Method: GET
+  ApiPwaPricebooksGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-pricebooks-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/62590222877651c069232a81405a6dd1
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /pricebooks
+            Method: GET
+        ExternalModelsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /pricebooks
+            Method: GET
+  ApiPwaPricebooksPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-pricebooks-post
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/aa10b967024fd2a972c8909ec6d7a931
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /pricebooks
+            Method: POST
+  ApiPwaModelUuidRecentGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-recent-get
+      Description: DEPRECATED backing to API, get recent quotes for a given model
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/cf37cc3f35c8bc89daba8aeba09df56a
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidRecentGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/recent
+            Method: GET
+  ApiPwaDealsetListGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealsets-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7e5c183636b8e3f9ee9d0df79ff6171b
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetListGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealsets
+            Method: GET
+  ApiPwaDealsetsTemplateGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealsets-template-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/5f3db8f391064c4eb79add49a748390e
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetsTemplateGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealsets/template
+            Method: GET
+  ApiPwaDealsetDeletePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealset-id-delete-post
+      Description: remove the dealset data from Dynamo
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7f31d5323b1ca122a9fc2b313feb9502
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetDeletePost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealset/{id}/delete
+            Method: POST
+  ApiPwaDealsetIdFiltersPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealset-id-filters-post
+      Description: save user Filters for the dealset
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/d4f78de6d01ac60d488aac6c6cb7fd05
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetIdFiltersPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealset/{id}/filters
+            Method: POST
+  ApiPwaDealsetIdReprocessPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealset-id-reprocess-post
+      Description: reprocess the dealset
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/2e63a0605c268443cbb92e936efc499d
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetIdReprocessPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealset/{id}/reprocess
+            Method: POST
+  ApiPwaDealsetPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealset-post
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/6ff01ffa0f7580a0ad9543cac6fd2a09
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealset
+            Method: POST
+  ApiPwaDealsetIdApprovePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealset-id-approve-post
+      Description: mark dealset as approved
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/a0eb7adcd11b9ec85cdbe6e27a52b87e
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetIdApprovePost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealset/{id}/approve
+            Method: POST
+  ApiPwaDealsetDealGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealset-id-deal-id-get
+      Description: return deal information within a dealset
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/61cb01386539fee7010cb6ef34b77399
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsetDEalGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealset/{id}/deal/{deal_id}
+            Method: GET
+  ApiPwaModelUuidPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-post
+      Description: create a new model or change the parameters of an existing one
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/e63792d6f0ae76641f713598b3509cf6
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}
+            Method: POST
+  ApiPwaModelUuidPricebookPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-pricebook-post
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/36fd382150c645999d1774a6e31bbe68
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidPricebookPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/pricebook
+            Method: POST
+  ApiPwaModelUuidDiscountGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-discount-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/95fc8471075557fcc0b9757340a30011
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDiscountGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/discount
+            Method: GET
+        ExternalModelUuidDiscountGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /model/{model_uuid}/discount
+            Method: GET
+  ApiPwaModelUuidDatapointsGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-datapoints-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/69a4090229c3aac6e13cdaa819584b19
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDatapointsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/datapoints
+            Method: GET
+        ExternalModelUuidDatapointsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /model/{model_uuid}/datapoints
+            Method: GET
+  ApiPwaModelUuidDealsetUuidOptimizePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-optimize-dealset-uuid-post
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7b4f4d041d82736f4edab08600aff3ef
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidOptimizePost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/optimize/{dealset_uuid}
+            Method: POST
+  ApiPwaModelUuidDatapointByDiscountAmtGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs14.x
+      Handler: handler.handler
+      Layers:
+      - Ref: NodeJsLayer
+      FunctionName: api-pwa-model-uuid-datapoint-by-discount-amt-get
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/298af4f9531c83880cd42caac787d5c6
+      Description: backing to API
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDatapointByDiscountAmtGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/datapoint/by-discount-amt
+            Method: GET
+        ExternalModelUuidDatapointByDiscountAmtGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /model/{model_uuid}/datapoint/by-discount-amt
+            Method: GET
+  ApiPwaModelUuidDatapointByDiscountPctGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs14.x
+      Handler: handler.handler
+      Layers:
+      - Ref: NodeJsLayer
+      FunctionName: api-pwa-model-uuid-datapoint-by-discount-pct-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/f6f849e4848bb866ba10c54f71345d93
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDatapointByDiscountPctGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/datapoint/by-discount-pct
+            Method: GET
+        ExternalModelUuidDatapointByDiscountPctGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /model/{model_uuid}/datapoint/by-discount-pct
+            Method: GET
+  ApiPwaModelUuidDatapointByNetGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-datapoint-by-net-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/c4b133831cd989b3dbd1f02b0f8e4489
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDatapointByNetGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/datapoint/by-net
+            Method: GET
+        ExternalModelUuidDatapointByNetGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /model/{model_uuid}/datapoint/by-net
+            Method: GET
+  ApiPwaModelUuidDatapointByListGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-model-uuid-datapoint-by-list-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/b825d6f628a42959081eb23978c46dcf
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidDatapointByListGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /model/{model_uuid}/datapoint/by-list
+            Method: GET
+        ExternalModelUuidDatapointByListGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ExternalApi
+            Path: /model/{model_uuid}/datapoint/by-list
+            Method: GET
+  ApiPwaUserTenancyGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-user-tenancy-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/3761d4bdda080a4cbeb6fa38f4df0eb3
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        UploadListPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /user/tenancy
+            Method: GET
+  ApiPwaUserTenancyPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-user-tenancy-post
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/84016bd83452e5d509713b88276375ff
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        UploadListPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /user/tenancy
+            Method: POST
+  ApiPwaDealsheetPostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealsheet-post
+      Description: DEPRECATED create a new dealsheet
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/927f99648ebea60817190ddd77438774
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        UploadListPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealsheet
+            Method: POST
+  ApiPwaDealsheetUuidNamePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealsheet-uuid-post
+      Description: change the customer name on the dealsheet
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/e871440d78247551bb3c6b036f2a90b7
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        UploadListPost:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealsheet/{dealsheet_uuid}
+            Method: POST
+  ApiPwaDealsheetUuidVersionsGet:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-dealsheet-uuid-versions-get
+      Description: get the dealsheet versions if any
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/f003c8b79ad83b2accd375e07e23654a
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        DealsheetUuidVersionsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /dealsheet/{dealsheet_uuid}/versions
+            Method: GET
+  ApiPwaModelsRecentGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-models-recent-get
+      Description: DEPRECATED backing to API, get recent quotes across all models
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/ce5bb2dea5ff2cac01889addf55f589b
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidRecentGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /models/recent
+            Method: GET
+  ApiPwaAuthorizationCustomerGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-tenants-get
+      Description: return list of tenants
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/aa34df725afde63d0319c0a2818c9c51
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        TenantsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /tenants
+            Method: GET
+  ApiPwaAuthorizationCustomerPutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-tenant-name-provision-put
+      Description: provision a new tenant
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/bd2ca67da28ecced9dc060162e4c0786
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Environment:
+        Variables:
+          STEPS_PROVISION_ARN:
+            Ref: StepsProvisionCustomer
+      Events:
+        AuthCustomerPut:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /tenant/{tenant_name}/provision
+            Method: PUT
+  ApiPwaTenantNameSuspendPutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-tenant-name-suspend-put
+      Description: suspend an active tenant
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/41805d15533665a25cd2d9f4b8780a63
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidQuotesGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /tenant/{tenant_name}/suspend
+            Method: PUT
+  ApiPwaTenantNameActivatePutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-tenant-name-activate-put
+      Description: activate a suspended tenant
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/9a219f8f23e76ecaec815582bf0ce832
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        ModelUuidQuotesGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /tenant/{tenant_name}/activate
+            Method: PUT
+  ApiPwaAuthorizationCustomerModelGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-tenant-name-models-get
+      Description: get model information for the tenant
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/d7723a7ce163c26d56f2eca445d20d7c
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthCustomerModelGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /tenant/{tenant_name}/models
+            Method: GET
+  ApiPwaTenantNameModelUuidAuthorizePutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-tenant-name-model-uuid-authorize-put
+      Description: authorize a model for users in the tenant
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/084dc0c79ffa24ec472c3a496de562a5
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthCustomerModelGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /tenant/{tenant_name}/model/{model_uuid}/authorize
+            Method: PUT
+  ApiPwaTenantNameModelUuidDeauthorizePutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-tenant-name-model-uuid-deauthorize-put
+      Description: deauthorize a model for users in the tenant
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/dd034f8b1393adc5a16174e8c0a744af
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthCustomerModelGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /tenant/{tenant_name}/model/{model_uuid}/deauthorize
+            Method: PUT
+  ApiPwaAuthorizationModelListGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-authorization-model-list-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/be34104cbdf3727bf46c2377007c5713
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthModelListGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /authorization/model/list
+            Method: GET
+  ApiPwaAuthorizationProfileGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-authorization-profile-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/0175e9f7aab68169a84a453a6f616a25
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthProfileGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /authorization/profile
+            Method: GET
+  ApiPwaAuthorizationUserGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-authorization-user-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/c10a1bd0b8ce5457edf04e61fa70e68a
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthUserGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /authorization/user
+            Method: GET
+  ApiPwaAuthorizationUserPutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-authorization-user-put
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/2c6e297bef958f80b99f5ba3a1eea8fb
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthUserPut:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /authorization/user
+            Method: PUT
+  ApiPwaAuthorizationUserListGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-pwa-authorization-user-list-get
+      Description: backing to API
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/b51213b0fc52a1b8f7add835723c0ee3
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Events:
+        AuthUserListGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: InternalApi
+            Path: /authorization/user/list
+            Method: GET
+  StepsGetTenantModelsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-get-tenant-models
+      Description: get list of models for a tenant
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/45bd4c6fe8ebd7022263894178237d6f
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsModelCalcUsageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-tenant-calc-model-usage-totals-calc
+      Description: async calculation
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/5d2501e4c5aac6166e8ffcdc3b20bda4
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsTenantCalcModelUsageTotals:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: TenantCalcModelUsageTotals
+      RoleArn:
+        Fn::ImportValue: foundation-iam-states-exec-role-arn
+      DefinitionString:
+        Fn::Sub: "{\n  \"Comment\": \"Update the Totals and Totals_by_month in the\
+          \ Dynamo usage table for the given tenant\",\n  \"StartAt\": \"InitStatusAsNoWork\"\
+          ,\n  \"States\": {\n    \"InitStatusAsNoWork\": {\n      \"Type\": \"Pass\"\
+          ,\n      \"Parameters\": {\n        \"tenant.$\" : \"$.StatePayload.tenant\"\
+          ,\n        \"status\": false\n      },\n      \"Next\": \"GetModelUuids\"\
+          \n    },\n    \"GetModelUuids\": {\n      \"Type\": \"Task\",\n      \"\
+          Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-get-tenant-models\"\
+          ,\n      \"ResultPath\": \"$.dynamo\",\n      \"Next\": \"IterateModels\"\
+          \n     },\n     \"IterateModels\": {\n      \"Type\": \"Choice\",\n    \
+          \  \"Choices\": [\n        {\n          \"Not\": {\n            \"Variable\"\
+          : \"$.dynamo.ModelTable.Models[0].uuid\",\n            \"StringEquals\"\
+          : \"DONE\"\n          },\n          \"Next\": \"ModelIsDirty\"\n       \
+          \ }\n      ],\n      \"Default\": \"DidWeDoWork\"\n     },\n     \"ModelIsDirty\"\
+          : {\n      \"Type\": \"Choice\",\n      \"Choices\": [\n        {\n    \
+          \      \"Variable\": \"$.dynamo.ModelTable.Models[0].is_dirty\",\n     \
+          \     \"BooleanEquals\": true,\n          \"Next\": \"UpdateDirtyFlag\"\n\
+          \        }\n      ],\n      \"Default\": \"PopModelFromList\"\n     },\n\
+          \    \"UpdateDirtyFlag\": {\n      \"Type\": \"Task\",\n      \"Resource\"\
+          : \"arn:aws:states:::dynamodb:updateItem\",\n      \"OutputPath\" : \"$\"\
+          ,\n      \"ResultPath\" : \"$.api\",\n      \"Parameters\": {\n        \"\
+          Key\": {\n          \"uuid.$\": \"$.dynamo.ModelTable.Models[0].uuid\"\n\
+          \          },\n        \"UpdateExpression\": \"SET is_dirty = :bf\",\n \
+          \       \"ExpressionAttributeValues\": {\n          \":bf\": {\n       \
+          \     \"BOOL\": false\n          }\n        },\n        \"TableName.$\"\
+          : \"$.dynamo.ModelTable.TableName\"\n      },\n      \"Next\": \"CalcModelUsage\"\
+          \n    },\n   \"CalcModelUsage\": {\n      \"Type\": \"Task\",\n      \"\
+          InputPath\": \"$\",\n      \"OutputPath\": \"$\",\n      \"Resource\": \"\
+          arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-tenant-calc-model-usage-totals-calc\"\
+          ,\n      \"Next\": \"PopModelFromList\"\n    },\n    \"PopModelFromList\"\
+          : {\n      \"Type\": \"Pass\",\n      \"InputPath\": \"$\",\n      \"ResultPath\"\
+          : \"$.dynamo\",\n      \"Parameters\": {\n        \"ModelTable\" : { \"\
+          TableName.$\" : \"$.dynamo.ModelTable.TableName\",\n                   \
+          \      \"TableStatus.$\": \"$.dynamo.ModelTable.TableStatus\",\n       \
+          \                  \"Models.$\" :  \"$.dynamo.ModelTable.Models[1:]\"\n\
+          \                       },\n        \"UsageTable.$\": \"$.dynamo.UsageTable\"\
+          ,\n        \"tenant.$\" : \"$.tenant\"\n      },\n      \"Next\": \"IterateModels\"\
+          \n    },\n    \"DidWeDoWork\": {\n      \"Type\": \"Choice\",\n      \"\
+          Choices\": [\n        {\n          \"Variable\": \"$.status\",\n       \
+          \   \"BooleanEquals\": true,\n          \"Next\": \"ReExecuteThisStateMachine\"\
+          \n        }\n      ],\n      \"Default\": \"end\"\n     },\n    \"ReExecuteThisStateMachine\"\
+          : {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::states:startExecution\"\
+          ,\n      \"Parameters\": {\n        \"StateMachineArn\": \"arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:TenantCalcModelUsageTotals\"\
+          ,\n        \"Input\": {\n          \"AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$\"\
+          : \"$$.Execution.Id\",\n          \"StatePayload.$\": \"$\"\n        }\n\
+          \      },\n      \"Next\": \"end\"\n    },\n    \"end\": {\n      \"Type\"\
+          : \"Pass\",\n      \"Result\": \"notif?\",\n      \"End\": true\n    }\n\
+          \  }\n}"
+  StepsServiceRolePolicyToExecStepsTenantCalcModelUsageTotals:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: StepsInvokeStepFunction_TenantCalcModelUsage
+      Roles:
+      - Fn::ImportValue: foundation-iam-states-exec-role-name
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action: states:StartExecution
+          Resource:
+            Ref: StepsTenantCalcModelUsageTotals
+  StepsTenantCalcModelUsageTotalsStartFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-tenant-calc-model-usage-totals-start
+      Description: start the state machine TenantCalcModelUsageTotals
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/bb0eb37ef2fd8565fe2a4cef8c1af5dc
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  ScheduledTenantCalcRulePermissionToInvokeStepsTenantCalcModelUsageTotalsStartFunction:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: StepsTenantCalcModelUsageTotalsStartFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - ScheduledTenantCalcRule
+        - Arn
+  ScheduledTenantCalcRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Tenant Calc Model Usage - Run every 12 hours
+      ScheduleExpression: rate(12 hours)
+      State: ENABLED
+      Targets:
+      - Arn:
+          Fn::GetAtt:
+          - StepsTenantCalcModelUsageTotalsStartFunction
+          - Arn
+        Id: StepsTenantCalcModelUsageTotalsStartFunction
+  UserUploadCreateUploadTableFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: user-upload-create-upload-table
+      Description: called by sns-aggregate-deals to create athena table
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/455ae6d57d04c5e20180edd8f0f4e85f
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  SnsAggregateDealsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: sns-aggregate-deals
+      Description: called by API to aggregate deal lines to deals
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/cb56bc0c7344d758666a799a79673c1c
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Timeout: 180
+  SnsAggregateDealsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: aggregate-deals
+      Subscription:
+      - Protocol: lambda
+        Endpoint:
+          Fn::GetAtt:
+          - SnsAggregateDealsFunction
+          - Arn
+  SnsAggregateDealsFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn:
+        Ref: SnsAggregateDealsTopic
+      FunctionName:
+        Fn::GetAtt:
+        - SnsAggregateDealsFunction
+        - Arn
+  SnsAggregateDealsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+      - Ref: SnsAggregateDealsTopic
+      PolicyDocument:
+        Id: SnsAggregateDealsTopicPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowLambdaToPublish
+          Effect: Allow
+          Action: sns:Publish
+          Resource:
+            Ref: SnsAggregateDealsTopic
+          Principal:
+            AWS:
+              Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  SnsClusterDealsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: sns-cluster-deals
+      Description: called by API to create clusters
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/4af1abf6787d462d2c8223f05fb3d204
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  SnsClusterDealsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: cluster-deals
+      Subscription:
+      - Protocol: lambda
+        Endpoint:
+          Fn::GetAtt:
+          - SnsClusterDealsFunction
+          - Arn
+  SnsClusterDealsFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn:
+        Ref: SnsClusterDealsTopic
+      FunctionName:
+        Fn::GetAtt:
+        - SnsClusterDealsFunction
+        - Arn
+  SnsClusterDealsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+      - Ref: SnsClusterDealsTopic
+      PolicyDocument:
+        Id: SnsClusterDealsTopicPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowLambdaToPublish
+          Effect: Allow
+          Action: sns:Publish
+          Resource:
+            Ref: SnsClusterDealsTopic
+          Principal:
+            AWS:
+              Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  SnsModelOptimizeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: sns-model-optimize
+      Description: called by API to optimize a model for a dealset
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/7b83e2f25ab231f7582036371ea8c3ff
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+      Timeout: 180
+  SnsModelOptimizeTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: model-optimize
+      Subscription:
+      - Protocol: lambda
+        Endpoint:
+          Fn::GetAtt:
+          - SnsModelOptimizeFunction
+          - Arn
+  SnsModelOptimizeFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn:
+        Ref: SnsModelOptimizeTopic
+      FunctionName:
+        Fn::GetAtt:
+        - SnsModelOptimizeFunction
+        - Arn
+  SnsModelOptimizeTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+      - Ref: SnsModelOptimizeTopic
+      PolicyDocument:
+        Id: SnsModelOptimizeTopicPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowLambdaToPublish
+          Effect: Allow
+          Action: sns:Publish
+          Resource:
+            Ref: SnsModelOptimizeTopic
+          Principal:
+            AWS:
+              Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoAuthorizationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-authorization
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/c140ae26557d909d7fa8d6979b1f6720
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoAddAuthorizationUsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-add-authorization-users
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/0d3891ae91063f3e1dc33b9de6b01364
+      Environment:
+        Variables:
+          USER_POOL_ID:
+            Fn::ImportValue: foundation-cognito-user-pool-id
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoModelFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-model
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/211f89ed145ae922b1f1de8fe6814938
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoModelUsageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-model-usage
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/fc63f683630ad852f0b107b53667da21
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoMonetizationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-monetization
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/2a8e61728fb62d1d350ae1939c86a19b
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsSesProvisionSuccessFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-ses-success
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/9d38f49ead31fc751b6a99c5a456cdad
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoAddCustomer:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-add-customer
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/abb5ee1145db790bebef62ca6a331d1a
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionApiKeyCreate:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-api-key-create
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/15e64c51df82ac620817ac98d7b93cf2
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionApiKeyAdd:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-api-key-add
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/32d67aa115efd51c6b600cad3587f52d
+      Environment:
+        Variables:
+          USAGE_PLAN_ID:
+            Ref: ExternalApi.UsagePlan
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionApiDeploy:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-api-deploy
+      Description: called by Steps - ProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/4684bcc60883bf9251c0999c18b235dc
+      Environment:
+        Variables:
+          EXTERNAL_API_ID:
+            Ref: ExternalApi
+          EXTERNAL_API_STAGE:
+            Ref: ExternalApi.Stage
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionCustomer:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: ProvisionCustomer
+      RoleArn:
+        Fn::ImportValue: foundation-iam-states-exec-role-arn
+      DefinitionString:
+        Fn::Sub: "{\n  \"StartAt\": \"NotificationOfStart\",\n  \"States\": {\n  \
+          \  \"NotificationOfStart\": {\n      \"Type\": \"Task\",\n      \"Resource\"\
+          : \"arn:aws:states:::sns:publish\",\n      \"Parameters\": {\n        \"\
+          Message\": \"Began provisioning a new customer. You will receive an email\
+          \ once complete.\",\n        \"TopicArn\": \"arn:aws:sns:${AWS::Region}:${AWS::AccountId}:ops-notifications\"\
+          \n      },\n      \"ResultPath\": \"$.result\",\n      \"OutputPath\": \"\
+          $\",\n      \"Next\": \"CreateDynamoAndRoute53\"\n    },\n    \"CreateDynamoAndRoute53\"\
+          : {\n      \"Type\": \"Parallel\",\n      \"Next\": \"NotificationOfSuccess\"\
+          ,\n      \"ResultPath\": \"$.nameservers\",\n      \"OutputPath\": \"$\"\
+          ,\n      \"Branches\": [\n        {\n          \"StartAt\": \"DynamoAuthorization\"\
+          ,\n          \"States\": {\n            \"DynamoAuthorization\": {\n   \
+          \           \"Type\": \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-authorization\"\
+          ,\n              \"Next\": \"DynamoAddAuthorizationUsers\"\n           \
+          \ },\n            \"DynamoAddAuthorizationUsers\": {\n              \"Type\"\
+          : \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-add-authorization-users\"\
+          ,\n              \"End\": true\n            }\n          }\n        },\n\
+          \        {\n          \"StartAt\": \"DynamoModel\",\n          \"States\"\
+          : {\n            \"DynamoModel\": {\n              \"Type\": \"Task\",\n\
+          \              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-model\"\
+          ,\n                \"End\": true\n            }\n          }\n        },\n\
+          \        {\n          \"StartAt\": \"DynamoModelUsage\",\n          \"States\"\
+          : {\n            \"DynamoModelUsage\": {\n              \"Type\": \"Task\"\
+          ,\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-model-usage\"\
+          ,\n                \"End\": true\n            }\n          }\n        },\n\
+          \        {\n          \"StartAt\": \"DynamoMonetization\",\n          \"\
+          States\": {\n            \"DynamoMonetization\": {\n              \"Type\"\
+          : \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-monetization\"\
+          ,\n                \"End\": true\n            }\n          }\n        },\n\
+          \        {\n          \"StartAt\": \"DynamoCustomerAdd\",\n          \"\
+          States\": {\n            \"DynamoCustomerAdd\": {\n              \"Type\"\
+          : \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-add-customer\"\
+          ,\n                \"End\": true\n            }\n          }\n        },\n\
+          \        {\n          \"StartAt\": \"ApiKeyCreate\",\n          \"States\"\
+          : {\n            \"ApiKeyCreate\": {\n              \"Type\": \"Task\",\n\
+          \              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-api-key-create\"\
+          ,\n              \"Next\": \"ApiKeyAdd\",\n              \"ResultPath\"\
+          : \"$.api\",\n              \"OutputPath\": \"$\"\n            },\n    \
+          \        \"ApiKeyAdd\": {\n              \"Type\": \"Task\",\n         \
+          \     \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-api-key-add\"\
+          ,\n              \"Next\": \"ApiDeploy\",\n              \"ResultPath\"\
+          : \"$.api\",\n              \"OutputPath\": \"$\"\n            },\n    \
+          \        \"ApiDeploy\": {\n              \"Type\": \"Task\",\n         \
+          \     \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-api-deploy\"\
+          ,\n              \"End\": true\n            }\n          }\n        }\n\
+          \      ]\n    },\n    \"NotificationOfSuccess\": {\n      \"Type\": \"Task\"\
+          ,\n      \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-ses-success\"\
+          ,\n      \"End\": true\n    }\n  }\n}"
+  StepsProvisionDeleteApiUsagePlanAndKey:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-delete-api-usage-plan-and-key
+      Description: called by Steps - DeProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/73cf7009976857804978eb257a9fae95
+      Environment:
+        Variables:
+          USAGE_PLAN_ID:
+            Ref: ExternalApi.UsagePlan
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoDeleteCustomer:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-delete-customer
+      Description: called by Steps - DeProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/5675a566cea33e151f5b5141219a730b
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionDynamoDeletTablesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-dynamo-delete-tables
+      Description: called by Steps - DeProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/55850becde420ca47e570280e3740803
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsProvisionCognitoDisableUsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: steps-provision-cognito-disable-users
+      Description: called by Steps - DeProvisionCustomer
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/e8869aeef9a38939cb0ae1930441d562
+      Environment:
+        Variables:
+          USER_POOL_ID:
+            Fn::ImportValue: foundation-cognito-user-pool-id
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+  StepsDeProvisionCustomer:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: DeProvisionCustomer
+      RoleArn:
+        Fn::ImportValue: foundation-iam-states-exec-role-arn
+      DefinitionString:
+        Fn::Sub: "{\n  \"StartAt\": \"NotificationOfStart\",\n  \"States\": {\n  \
+          \  \"NotificationOfStart\": {\n      \"Type\": \"Task\",\n      \"Resource\"\
+          : \"arn:aws:states:::sns:publish\",\n      \"Parameters\": {\n        \"\
+          Message\": \"Began de-provisioning customer.\",\n        \"TopicArn\": \"\
+          arn:aws:sns:${AWS::Region}:${AWS::AccountId}:ops-notifications\"\n     \
+          \ },\n      \"ResultPath\": \"$.result\",\n      \"OutputPath\": \"$\",\n\
+          \      \"Next\": \"Deletes\"\n    },\n    \"Deletes\": {\n      \"Type\"\
+          : \"Parallel\",\n      \"Next\": \"NotificationOfSuccess\",\n      \"OutputPath\"\
+          : \"$\",\n      \"Branches\": [\n        {\n          \"StartAt\": \"DynamoDeleteTables\"\
+          ,\n          \"States\": {\n            \"DynamoDeleteTables\": {\n    \
+          \          \"Type\": \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-delete-tables\"\
+          ,\n              \"End\": true\n            }\n          }\n        },\n\
+          \        {\n          \"StartAt\": \"DynamoDeleteCustomer\",\n         \
+          \ \"States\": {\n            \"DynamoDeleteCustomer\": {\n             \
+          \ \"Type\": \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-dynamo-delete-customer\"\
+          ,\n                \"End\": true\n            }\n          }\n        },\n\
+          \        {\n          \"StartAt\": \"ApiDeleteUsagePlanAndKeyDelete\",\n\
+          \          \"States\": {\n            \"ApiDeleteUsagePlanAndKeyDelete\"\
+          : {\n              \"Type\": \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-delete-api-usage-plan-and-key\"\
+          ,\n              \"Next\": \"ApiDeploy\",\n              \"OutputPath\"\
+          : \"$\"\n            },\n            \"ApiDeploy\": {\n              \"\
+          Type\": \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-api-deploy\"\
+          ,\n              \"End\": true,\n              \"OutputPath\": \"$\"\n \
+          \           }\n          }\n        },\n        {\n          \"StartAt\"\
+          : \"CognitoDisableUsers\",\n          \"States\": {\n            \"CognitoDisableUsers\"\
+          : {\n              \"Type\": \"Task\",\n              \"Resource\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:steps-provision-cognito-disable-users\"\
+          ,\n                \"End\": true\n            }\n          }\n        }\n\
+          \      ]\n    },\n    \"NotificationOfSuccess\": {\n      \"Type\": \"Task\"\
+          ,\n      \"Resource\": \"arn:aws:states:::sns:publish\",\n      \"Parameters\"\
+          : {\n        \"Message\": \"Completed de-provisioning customer.\",\n   \
+          \     \"TopicArn\": \"arn:aws:sns:${AWS::Region}:${AWS::AccountId}:ops-notifications\"\
+          \n      },\n      \"End\": true\n    }\n  }\n}"
+  UtilReprovisionTenantsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: util-reprovision-tenants
+      Description: util - reprovision all tenants
+      CodeUri: s3://spp-code-790676557563-us-east-1/api-code/6cfd0abce97f55b0f024b784cb4b2ef7
+      Role:
+        Fn::ImportValue: foundation-iam-lambda-exec-role-arn
+Outputs:
+  ClarityPwaInternalAPI:
+    Description: Root API endpoint URL for Prod stage
+    Value:
+      Fn::Sub: https://${InternalApi}.execute-api.${AWS::Region}.amazonaws.com/Prod
+    Export:
+      Name: ClarityPwaInternalAPIRoot
+  ClarityPwaExternalAPI:
+    Description: Root API endpoint URL for Prod stage
+    Value:
+      Fn::Sub: https://${ExternalApi}.execute-api.${AWS::Region}.amazonaws.com/V1
+    Export:
+      Name: ClarityPwaExternalAPIRoot
