@@ -223,7 +223,7 @@ Resources:
             - '/'
             - !Ref GitHubRepositoryName
         Type:  GITHUB
-        BuildSpec: 03codebuild/clarity-api-postman-newman-buildspec.yml
+        BuildSpec: postman-newman/clarity-api-postman-newman-buildspec.yml
       TimeoutInMinutes: 10
       Tags:
         - Key: Name
@@ -262,61 +262,61 @@ Resources:
           OutputArtifacts:
           - Name: 'ClarityPwaCloudAPI-SourceArtifact'
           RunOrder: 1
+      # 
+      # - Name: Build
+      #   Actions:
+      #   - Name: BuildClarityPwaCloudAPI
+      #     ActionTypeId:
+      #       Owner: AWS
+      #       Category: Build
+      #       Version: 1
+      #       Provider: CodeBuild
+      #     Configuration:
+      #       ProjectName: !Ref ClarityPwaCloudAPISAMCodeBuildProject
+      #     InputArtifacts:
+      #     - Name: 'ClarityPwaCloudAPI-SourceArtifact'
+      #     OutputArtifacts:
+      #     - Name: 'ClarityPwaCloudAPI-BuildArtifact'
+      #     RunOrder: 1
 
-      - Name: Build
-        Actions:
-        - Name: BuildClarityPwaCloudAPI
-          ActionTypeId:
-            Owner: AWS
-            Category: Build
-            Version: 1
-            Provider: CodeBuild
-          Configuration:
-            ProjectName: !Ref ClarityPwaCloudAPISAMCodeBuildProject
-          InputArtifacts:
-          - Name: 'ClarityPwaCloudAPI-SourceArtifact'
-          OutputArtifacts:
-          - Name: 'ClarityPwaCloudAPI-BuildArtifact'
-          RunOrder: 1
-
-      - Name: Deploy
-        Actions:
-        - Name: GenerateChangeSet
-          ActionTypeId:
-            Owner: AWS
-            Category: Deploy
-            Version: 1
-            Provider: CloudFormation
-          Configuration:
-            TemplatePath: !Join
-            - ''
-            - - 'ClarityPwaCloudAPI-BuildArtifact'
-              - '::clarity-pwa-cloud-api-output.yaml'
-            ActionMode: CHANGE_SET_REPLACE
-            Capabilities: CAPABILITY_IAM
-            ChangeSetName: pipeline-changeset
-            RoleArn: !GetAtt
-            - CloudFormationTrustRole
-            - Arn
-            StackName: clarity-pwa-cloud
-          InputArtifacts:
-          - Name: 'ClarityPwaCloudAPI-BuildArtifact'
-          OutputArtifacts: []
-          RunOrder: 1
-
-        - Name: ExecuteChangeSet
-          ActionTypeId:
-            Owner: AWS
-            Category: Deploy
-            Version: 1
-            Provider: CloudFormation
-          Configuration:
-            ActionMode: CHANGE_SET_EXECUTE
-            ChangeSetName: pipeline-changeset
-            StackName: clarity-pwa-cloud-api-stack
-          InputArtifacts: []
-          OutputArtifacts: []
-          RunOrder: 2
+      # - Name: Deploy
+      #   Actions:
+      #   - Name: GenerateChangeSet
+      #     ActionTypeId:
+      #       Owner: AWS
+      #       Category: Deploy
+      #       Version: 1
+      #       Provider: CloudFormation
+      #     Configuration:
+      #       TemplatePath: !Join
+      #       - ''
+      #       - - 'ClarityPwaCloudAPI-BuildArtifact'
+      #         - '::clarity-pwa-cloud-api-output.yaml'
+      #       ActionMode: CHANGE_SET_REPLACE
+      #       Capabilities: CAPABILITY_IAM
+      #       ChangeSetName: pipeline-changeset
+      #       RoleArn: !GetAtt
+      #       - CloudFormationTrustRole
+      #       - Arn
+      #       StackName: clarity-pwa-cloud
+      #     InputArtifacts:
+      #     - Name: 'ClarityPwaCloudAPI-BuildArtifact'
+      #     OutputArtifacts: []
+      #     RunOrder: 1
+      #
+      #   - Name: ExecuteChangeSet
+      #     ActionTypeId:
+      #       Owner: AWS
+      #       Category: Deploy
+      #       Version: 1
+      #       Provider: CloudFormation
+      #     Configuration:
+      #       ActionMode: CHANGE_SET_EXECUTE
+      #       ChangeSetName: pipeline-changeset
+      #       StackName: clarity-pwa-cloud-api-stack
+      #     InputArtifacts: []
+      #     OutputArtifacts: []
+      #     RunOrder: 2
 
       # https://docs.aws.amazon.com/codepipeline/latest/userguide/actions-invoke-lambda-function.html
       - Name: Test
